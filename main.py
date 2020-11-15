@@ -9,13 +9,19 @@ import json
 
 import numpy as np
 import torch
-from torch.utils.tensorboard import SummaryWriter
+try:
+    from torch.utils.tensorboard import SummaryWriter
+except ModuleNotFoundError:
+    from tensorboardX import SummaryWriter
 
 from sklearn.model_selection import train_test_split
 from sklearn.linear_model import LogisticRegressionCV
-from sklearn.metrics import roc_auc_score, precision_recall_curve, auc, f1_score, recall_score, precision_score
+from sklearn.metrics import roc_auc_score, auc
+from sklearn.metrics import f1_score, recall_score, precision_score
+from sklearn.metrics import precision_recall_curve
 
-from phenotools import factor_matrices_to_xlsx, extract_corrs_to_xlsx, sparsity_similarity
+from phenotools import sparsity_similarity
+from phenotools import factor_matrices_to_xlsx, extract_corrs_to_xlsx
 
 from hitf import CollectiveHITF
 
@@ -72,7 +78,7 @@ def evaluation(indata, factors, idx_train, pt_rep_train, pt_rep_test,
     ###########################################
     if 'dx' in modalities and 'rx' in modalities:
         filepath = out_path / f'correspondence-dxrx-{gethostname()}-{os.getpid()}.xlsx'
-        extract_corrs_to_xlsx(indata['D'][idx_train, :],
+        extract_corrs_to_xlsx(indata['dx'][idx_train, :],
                               pt_rep_train, factors['dx'], factors['rx'],
                               indata['dx_idx2desc'],
                               indata['rx_idx2desc'],
@@ -80,7 +86,7 @@ def evaluation(indata, factors, idx_train, pt_rep_train, pt_rep_test,
 
     if 'dx' in modalities and 'lab' in modalities:
         filepath = out_path / f'correspondence-dxlab-{gethostname()}-{os.getpid()}.xlsx'
-        extract_corrs_to_xlsx(indata['D'][idx_train, :],
+        extract_corrs_to_xlsx(indata['dx'][idx_train, :],
                               pt_rep_train, factors['dx'], factors['lab'],
                               indata['dx_idx2desc'],
                               indata['lab_idx2desc'],
@@ -88,7 +94,7 @@ def evaluation(indata, factors, idx_train, pt_rep_train, pt_rep_test,
 
     if 'rx' in modalities and 'lab' in modalities:
         filepath = out_path / f'correspondence-rxlab-{gethostname()}-{os.getpid()}.xlsx'
-        M_binarized = indata['M'][idx_train, :]
+        M_binarized = indata['rx'][idx_train, :]
         M_binarized[M_binarized > 0] = 0
         extract_corrs_to_xlsx(M_binarized,
                               pt_rep_train, factors['rx'], factors['lab'],
@@ -98,7 +104,7 @@ def evaluation(indata, factors, idx_train, pt_rep_train, pt_rep_test,
     
     if 'dx' in modalities and 'input' in modalities:
         filepath = out_path / f'correspondence-dxinput-{gethostname()}-{os.getpid()}.xlsx'
-        extract_corrs_to_xlsx(indata['D'][idx_train, :],
+        extract_corrs_to_xlsx(indata['dx'][idx_train, :],
                               pt_rep_train, factors['dx'], factors['input'],
                               indata['dx_idx2desc'],
                               indata['input_idx2desc'],
@@ -119,7 +125,9 @@ def evaluation(indata, factors, idx_train, pt_rep_train, pt_rep_test,
     }
 
     with open(out_path / 'evaluation.json', 'w') as f:
-        json.dump(evaluation, f)
+        json.dump(evaluation, f, indent=2)
+    
+    return evaluation
 
 
 def chitf_train_evaluate(exp_id,
@@ -140,13 +148,15 @@ def chitf_train_evaluate(exp_id,
                          test_size=0.2,
                          max_iters=1000000,
                          max_proj_iters=6000,
-                         device=None,
+                         cuda=None,
                          seed=None):
 
     if seed is not None:
         torch.manual_seed(seed)
-    if device is None:
+    if cuda is None:
         device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
+    else:
+        device = torch.device('cuda:'+str(cuda))
 
     # load data
     with open(data_path, 'rb') as f:
@@ -158,19 +168,25 @@ def chitf_train_evaluate(exp_id,
                                                                             test_size=test_size,
                                                                             random_state=seed)
     inputs = {
-        'dx': (torch.FloatTensor(indata['D']).to(device), True),
-        'rx': (torch.FloatTensor(indata['M']).to(device), False),
-        'lab': (torch.FloatTensor(indata['L']).to(device), False),
+        'dx': (torch.FloatTensor(indata['dx']).to(device), True)
     }
 
-    if 'T' in indata.keys():
-        input_fluids = torch.FloatTensor(indata['T']).to(device)
-        inputs['input'] = (input_fluids, False)
+    if 'rx' in indata.keys():
+        inputs['rx'] = (torch.FloatTensor(indata['rx']).to(device), False)
+
+    if 'lab' in indata.keys():
+        inputs['lab'] = (torch.FloatTensor(indata['lab']).to(device), False)
+
+    if 'input' in indata.keys():
+        inputs['input'] = (torch.FloatTensor(indata['input']).to(device), False)
 
     modes_involved = []
     for modes in modalities:
         modes_involved += modes.split('-')
     modes_involved = list(set(modes_involved))
+    for mode_ in modes_involved:
+        if mode_ not in inputs.keys():
+            raise RuntimeError(f'Modality {mode_} not found in data.')
 
     inputs_train = {k: (X[torch.LongTensor(idx_train)], bin_)
                     for k, (X, bin_) in inputs.items()
@@ -179,13 +195,13 @@ def chitf_train_evaluate(exp_id,
                    for k, (X, bin_) in inputs.items()
                    if k in modes_involved}
 
-    print(modalities)
     print(f'Data loaded from: {data_path}')
     print(f'  Training size ratio: {train_size:.0%}')
     print(f'  Test size ratio: {test_size:.0%}')
     print('  Sizes of training data: ', [X.shape for k, (X, t) in inputs_train.items()])
     print()
-    print('Configurations:')
+    print('Modalities:', modalities)
+    print('\nConfigurations:')
     print(f'  Hidden Tensors: {"; ".join([f"{m}({d})" for m,d in zip(modalities, distributions)])}')
     print(f'  Rank: {rank}')
     print(f'  Learning Rate: {init_lr}')
@@ -223,7 +239,7 @@ def chitf_train_evaluate(exp_id,
 
     print('\n\nProjection:')
     projector = chitf.construct_projector(inputs_test)
-    projector.fit(max_iters=max_proj_iters, lr_init=0.1)
+    projector.fit(max_iters=max_proj_iters, lr_init=0.001)
 
     pt_rep_train = chitf.factors.pt_reps.data.cpu().numpy()
     pt_rep_test = projector.factors.pt_reps.data.cpu().numpy()
@@ -232,56 +248,70 @@ def chitf_train_evaluate(exp_id,
 
     factors = {k: v.data.cpu().numpy() for k, v in chitf.factors.factors.items()}
 
-    evaluation(indata, factors, idx_train, pt_rep_train, pt_rep_test,
-               mortality_train, mortality_test,
-               out_path)
+    scores = evaluation(indata, factors, idx_train, pt_rep_train, pt_rep_test,
+                        mortality_train, mortality_test,
+                        out_path)
 
     np.savez(out_path / 'patient_reps.npz',
              pt_rep_train=pt_rep_train, pt_rep_test=pt_rep_test,
              mortality_train=mortality_train, mortality_test=mortality_test)
 
     print('Done.')
+    scores.update(scores.pop('mortality_prediction'))
+    return scores
 
 
-if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description='cHITF Framework for Computational Phenotyping')
+def parse_args():
+    parser = argparse.ArgumentParser(description='HITF Model with group orthognal regularization')
 
-    parser.add_argument('exp_id', type=str)
+    parser.add_argument('--name', type=str, default='cHITF')
     parser.add_argument('-d', '--distributions', type=str, nargs='+', default=['P', 'P', 'G'])
     parser.add_argument('-M', '--modalities', type=str, nargs='+', default=['dx-rx', 'dx-lab', 'dx-input'])
     parser.add_argument('-w', '--weights', type=float, nargs='+', default=[1, 1, 1])
-    parser.add_argument('-i', '--input', type=str, default='./data/carevue-dx,rx,lab,input-20191003.pkl',
+    parser.add_argument('-i', '--input', type=str, 
+                        default='demo_data.pkl',
                         help='Path of input data.')
     parser.add_argument('-o', '--output', type=str, default='./results/')
     parser.add_argument('-R', '--rank', type=int, default=50,
-                        help='Specify the number of phenotypes.')
-    parser.add_argument('--seed', type=int, help='random seed')
+                        help='Specify the number of factors for the HITF basic model, or the maximum number '
+                             'of factors for the Group Orthogonal model.')
+    parser.add_argument('--seed', type=int, help='random seed', default=1)
+    parser.add_argument('--cuda', type=int, default=0)
     parser.add_argument('--angular_threshold', type=float, default=0.5)
     parser.add_argument('--angular_weight', type=float, default=1)
-    parser.add_argument('--elastic_weight', type=float, default=1e-3)
+    parser.add_argument('--elastic_weight', type=float, default=1e-5)
     parser.add_argument('--l1_ratio', type=float, default=0.7)
     parser.add_argument('-v', '--gaussian_var', type=float, default=1e-9)
     parser.add_argument('--lr', type=float, help='learning rate', default=0.0001)
     parser.add_argument('--weight_decay', type=float, default=0)
-    parser.add_argument('--max_iters', type=int, default=10000)
-    parser.add_argument('--max_proj_iters', type=int, default=3000)
+    parser.add_argument('--max_iters', type=int, default=20000)
+    parser.add_argument('--max_proj_iters', type=int, default=20000)
 
     args = parser.parse_args()
+    return args
 
-    chitf_train_evaluate(args.exp_id,
-                         data_path=args.input,
-                         out_path=args.output,
-                         rank=args.rank,
-                         modalities=args.modalities,
-                         distributions=args.distributions,
-                         weights=args.weights,
-                         init_lr=args.lr,
-                         weight_decay=args.weight_decay,
-                         seed=args.seed,
-                         angular_threshold=args.angular_threshold,
-                         angular_weight=args.angular_weight,
-                         elastic_weight=args.elastic_weight,
-                         elastic_l1_ratio=args.l1_ratio,
-                         gaussian_var=args.gaussian_var,
-                         max_iters=args.max_iters,
-                         max_proj_iters=args.max_proj_iters)
+
+def chitf_main(args):
+    return chitf_train_evaluate(args.name,
+                                data_path=args.input,
+                                out_path=args.output,
+                                rank=args.rank,
+                                modalities=args.modalities,
+                                distributions=args.distributions,
+                                weights=args.weights,
+                                init_lr=args.lr,
+                                weight_decay=args.weight_decay,
+                                seed=args.seed,
+                                cuda = args.cuda,
+                                angular_threshold=args.angular_threshold,
+                                angular_weight=args.angular_weight,
+                                elastic_weight=args.elastic_weight,
+                                elastic_l1_ratio=args.l1_ratio,
+                                gaussian_var=args.gaussian_var,
+                                max_iters=args.max_iters,
+                                max_proj_iters=args.max_proj_iters)
+
+
+if __name__ == '__main__':
+    args = parse_args()
+    chitf_main(args)

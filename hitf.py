@@ -1,8 +1,9 @@
 """
-Implementation of collective Hidden Interaction Tensor Factorization (cHITF) model based on
+Implementation of Hidden Interaction Tensor Factorization (HITF) model based on
 pytorch.
 
 """
+import time
 from copy import deepcopy
 from datetime import datetime
 
@@ -160,6 +161,7 @@ class CollectiveHITF(object):
         self.hidden_tensors = {}
         if weights is None:
             weights = [1] * len(modalities)
+        self.weights = weights
         for i, modes in enumerate(modalities):
             if distributions[i] == 'P':
                 mode_losses = [PoissonNegativeLikelihood(weights[i])] * len(modes.split('-'))
@@ -201,18 +203,33 @@ class CollectiveHITF(object):
         ap = average_precision_score(y_test, pred_prob)
         return auc, ap
 
+    def _get_item(self, x):
+        if isinstance(x, torch.Tensor):
+            return x.item()
+        elif isinstance(x, int):
+            return x
+        else:
+            raise TypeError('data type not supported.')
+
+
     def fit(self, lr_init=0.0001, weight_decay=0, max_iters=1000000):
-        # if not self.projector:
         optimizer = Adam(self.factors.parameters(), lr=lr_init, weight_decay=weight_decay)
-        # else:
-        #     optimizer = SGD([self.factors.pt_reps], lr=lr_init)
+        prefix = 'train' if not self.projector else 'projection'
         early_stop = EarlyStopping(patience=800)
 
         factors = {'pt_reps': self.factors.pt_reps}
         factors.update(self.factors.factors)
-
+        timers = []
         for iter_ in range(max_iters):
+            tic = time.time()
+            elastic_regs = []
+            angular_regs = []
+            nll_loss = 0
+            total_loss = 0
             for name, X in factors.items():
+                if self.projector and name != 'pt_reps':
+                    continue  # for projector: update patient representation only
+
                 for _, X_ in factors.items():
                     X_.requires_grad = False
                 X.requires_grad = True
@@ -232,33 +249,49 @@ class CollectiveHITF(object):
                         pt_loss_total += pt_loss
                 # pt_loss_total = pt_loss_total.mean() #/ self.num_pt
 
-                regularization = 0
+                nll_loss = pt_loss_total.mean()
                 if name != 'pt_reps':
-                    for mode, X in self.factors.factors.items():
-                        regularization += self.angular_weight * self.angular(X)
-                        regularization += self.elastic_weight * self.elastic_net(X)
+                    angular_reg = self.angular_weight * self.angular(X)
+                    elastic_reg = self.elastic_weight * self.elastic_net(X)
+                else:
+                    angular_reg = elastic_reg = 0
 
-                loss = pt_loss_total.mean() + regularization
-                loss.backward()
+                total_loss = nll_loss + angular_reg + elastic_reg
+                total_loss.backward()
                 optimizer.step()
                 self.factors.non_negative_projection()
+                
+                angular_reg = self._get_item(angular_reg)
+                elastic_reg = self._get_item(elastic_reg)
+
+                angular_regs.append(angular_reg)
+                elastic_regs.append(elastic_reg)
+
+                if self.writer is not None:
+                    self.writer.add_scalar(prefix+'/angular_'+name, angular_reg, iter_)
+                    self.writer.add_scalar(prefix+'/elastic_'+name, elastic_reg, iter_)
 
             if self.writer is not None:
-                self.writer.add_scalar('loss/loss_function', loss.item(), iter_)
-                self.writer.add_scalar('loss/nll', pt_loss_total.mean().item(), iter_)
+                self.writer.add_scalar(prefix+'/total_loss', total_loss.item(), iter_)
+                self.writer.add_scalar(prefix+'/nll_loss', nll_loss.item(), iter_)
 
-            
+            timers.append(time.time() - tic)
             if iter_ == 0 or (iter_ + 1) % 500 == 0:
-                print(f'{datetime.now().strftime("%Y-%m-%d %H:%M:%S")} | ',
-                        f'Iteration {iter_+1}: loss functions={loss.item():.6e}, '
-                        f'nll={pt_loss_total.mean().item():.6e}, '
-                        f'regularization={regularization.item():.6e}')
-                # if not self.projector and self.labels is not None:
-                #     auc, ap = self.validate_prediction()
-                #     print(f', prediction on training set: AUC={auc:.3f}, AP={ap:.3f}', end='')
-            if early_stop(-loss.item(), self.factors):
+                time_avg = sum(timers) / len(timers)
+                timers = []
+                
+                angular_reg_str = f'{torch.FloatTensor(angular_regs[1:]).mean():.3e}'
+                elastic_reg_str = f'{torch.FloatTensor(elastic_regs[1:]).mean():.3e}'
+                
+                info_str = f'[{datetime.now().strftime("%Y-%m-%d %H:%M:%S")}] '
+                info_str += f'Iteration {iter_+1}: loss={total_loss.item():.3e} | '
+                info_str += f'nll={nll_loss.item():.3e} | '
+                info_str += f'angular={angular_reg_str} | elastic={elastic_reg_str} | ' if not self.projector else ''
+                info_str += f'time={time_avg*1000:.1f}ms/it.'
+                print(info_str)
+
+            if early_stop(-total_loss.item(), self.factors):
                 break
-                # print()
 
     def construct_projector(self, test_inputs):
         num_pt_test = test_inputs[list(test_inputs.keys())[0]][0].shape[0]
@@ -275,7 +308,10 @@ class CollectiveHITF(object):
                                    rank=self.rank,
                                    device=self.device,
                                    gaussian_loss_kwargs=self.gaussian_loss_kwargs,
-                                   init_factors=factors)
+                                   init_factors=factors,
+                                   weights=self.weights,
+                                   tb_writer=self.writer,
+                                   projector=True)
         return projector
 
     def save_factors(self, fp):
@@ -288,16 +324,25 @@ class CollectiveHITF(object):
 
 
 class EarlyStopping(object):
-    def __init__(self, patience, restore_best=True):
+    def __init__(self, patience, restore_best=True, tolerance=None, relative_tolerance=1e-4):
         self.best_score = None
         self.plateau_counter = 0
         self.patience = patience
         self.stopped = False
         self.restore_best = restore_best
         self.best_state_dict = None
+        self.tolerance = tolerance
+        self.relative_tolerance = relative_tolerance
+    
+    def is_improved(self, score):
+        if self.tolerance is not None:
+            return score - self.best_score >= self.tolerance
+        if self.relative_tolerance is not None:
+            return score - self.best_score >= self.relative_tolerance * self.best_score
+        return score >= self.best_score
 
     def __call__(self, score, model):
-        if self.best_score is None or score >= self.best_score:
+        if self.best_score is None or self.is_improved(score):
             self.plateau_counter = 0
             self.best_score = score
             if self.restore_best:
