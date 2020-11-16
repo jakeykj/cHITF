@@ -5,7 +5,7 @@ This repo contains the PyTorch implementation of the paper `Learning Inter-Modal
 
 <p align="center"><img src="./cHITF_framework.png" width="90%"></p>  
 
-**Overview**: cHITF is a framework to jointly learn clinically meaningful phenotypes and hidden correspondence across different modalities from EHR data. Existing tensor factorization models mostly rely on the inter-modal correspondence to construct input tensors. In real-world datasets, the correspondence are often unknown and heuristics such as `equal-correspondence assumption` are commonly used, leading to inevitable errors. cHITF aims to *discover* such unknown inter-modal correspondence simultaneously with the phenotypes.
+**Overview**: cHITF is a framework to jointly learn clinically meaningful phenotypes and hidden correspondence across different modalities from EHR data. Existing tensor factorization models mostly rely on the inter-modal correspondence to construct input tensors. In real-world datasets, the correspondence are often unknown and heuristics such as "equal-correspondence" are commonly used, leading to inevitable errors. cHITF aims to *discover* such unknown inter-modal correspondence simultaneously with the phenotypes.
 
 Check out [our paper](https://arxiv.org/pdf/2011.06301.pdf) for more details.
 
