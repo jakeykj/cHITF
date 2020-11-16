@@ -20,6 +20,18 @@ If you find the paper or the implementation helpful, please cite the following p
 }
 ```
 
+This is an extension of our previous [IJCAI-18 paper](http://www.ijcai.org/proceedings/2018/504). You are also very welcome to check out and cite the IJCAI version:
+```bib
+@inproceedings{yin2018joint,
+  title={Joint learning of phenotypes and diagnosis-medication correspondence via hidden interaction tensor factorization},
+  author={Yin, Kejing and Cheung, William K and Liu, Yang and Fung, Benjamin C. M. and Poon, Jonathan},
+  booktitle={Proceedings of the Twenty-Seventh International Joint Conference on Artificial Intelligence ({IJCAI-18})},
+  pages={3627--3633},
+  year={2018},
+  organization={AAAI Press}
+}
+```
+
 
 ## Requirements
 The codes have been tested with the following packages:
