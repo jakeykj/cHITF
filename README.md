@@ -3,6 +3,12 @@
 This repo contains the PyTorch implementation of the paper `Learning Inter-Modal Correspondence and Phenotypes from Multi-Modal Electronic Health Records` in TKDE. [[paper]](https://arxiv.org/pdf/2011.06301.pdf) [[publisher]](https://doi.org/10.1109/TKDE.2020.3038211)
 
 
+<p align="center"><img src="./cHITF_framework.png" width="90%"></p>  
+
+**Overview**: cHITF is a framework to jointly learn clinically meaningful phenotypes and hidden correspondence across different modalities from EHR data. Existing tensor factorization models mostly rely on the inter-modal correspondence to construct input tensors. In real-world datasets, the correspondence are often unknown and heuristics such as `equal-correspondence assumption` are commonly used, leading to inevitable errors. cHITF aims to *discover* such unknown inter-modal correspondence simultaneously with the phenotypes.
+
+Check out [our paper](https://arxiv.org/pdf/2011.06301.pdf) for more details.
+
 ## Citation
 If you find the paper or the implementation helpful, please cite the following paper:
 ```bib
