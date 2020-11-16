@@ -20,7 +20,7 @@ If you find the paper or the implementation helpful, please cite the following p
 }
 ```
 
-This is an extension of our previous [IJCAI-18 paper](http://www.ijcai.org/proceedings/2018/504). You are also very welcome to check out and cite the IJCAI version:
+This is an extension of our previous [IJCAI-18 paper](http://www.ijcai.org/proceedings/2018/504). You may also check out and cite the IJCAI version:
 ```bib
 @inproceedings{yin2018joint,
   title={Joint learning of phenotypes and diagnosis-medication correspondence via hidden interaction tensor factorization},
@@ -83,7 +83,7 @@ python main.py --input <DATA_PATH>
 
 ## Contact
 If you have any enquires, please contact Mr. Kejing Yin by email: 
-`cskjyin [AT] comp [DOT] hkbu.edu.hk`. You are also very welcome to raise issues in this repository.
+`cskjyin [AT] comp [DOT] hkbu.edu.hk`. You can also raise issues in this repository.
 
 ---
 :point_right: Check out [my home page](https://kejing.me) for more research work by us.
